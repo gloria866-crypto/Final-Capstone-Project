@@ -88,8 +88,8 @@ resource "aws_iam_policy" "register_attendee" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
         Resource = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/Events"
       },
       {
