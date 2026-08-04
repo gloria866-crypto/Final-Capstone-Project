@@ -52,11 +52,6 @@ resource "aws_iam_role_policy_attachment" "attach_list_events" {
   policy_arn = aws_iam_policy.list_events.arn
 }
 
-resource "aws_iam_role_policy_attachment" "attach_get_event" {
-  role       = aws_iam_role.lambda_exec.name
-  policy_arn = aws_iam_policy.get_event.arn
-}
-
 resource "aws_iam_role_policy_attachment" "attach_register_attendee" {
   role       = aws_iam_role.lambda_exec.name
   policy_arn = aws_iam_policy.register_attendee.arn
@@ -65,6 +60,11 @@ resource "aws_iam_role_policy_attachment" "attach_register_attendee" {
 resource "aws_iam_role_policy_attachment" "attach_list_registrations" {
   role       = aws_iam_role.lambda_exec.name
   policy_arn = aws_iam_policy.list_registrations.arn
+}
+
+resource "aws_iam_role_policy_attachment" "attach_delete_registration" {
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = aws_iam_policy.delete_registration.arn
 }
 
 # createEvent — needs PutItem on Events
@@ -93,19 +93,6 @@ resource "aws_iam_policy" "list_events" {
   })
 }
 
-# getEvent — needs GetItem on Events
-resource "aws_iam_policy" "get_event" {
-  name = "get_event_policy"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "dynamodb:GetItem"
-      Resource = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/Events"
-    }]
-  })
-}
-
 # registerAttendee — needs GetItem + UpdateItem on Events, PutItem on Registrations
 resource "aws_iam_policy" "register_attendee" {
   name = "register_attendee_policy"
@@ -126,7 +113,7 @@ resource "aws_iam_policy" "register_attendee" {
   })
 }
 
-# listRegistrations — needs Query on Registrations table and its GSI
+# listRegistrations — needs Query on Registrations attendeeEmail GSI
 resource "aws_iam_policy" "list_registrations" {
   name = "list_registrations_policy"
   policy = jsonencode({
@@ -136,9 +123,29 @@ resource "aws_iam_policy" "list_registrations" {
       Action = "dynamodb:Query"
       Resource = [
         "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/Registrations",
-        "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/Registrations/index/eventId-index"
+        "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/Registrations/index/attendeeEmail-index"
       ]
     }]
+  })
+}
+
+# deleteRegistration — needs GetItem + DeleteItem on Registrations, UpdateItem on Events
+resource "aws_iam_policy" "delete_registration" {
+  name = "delete_registration_policy"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:DeleteItem"]
+        Resource = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/Registrations"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "dynamodb:UpdateItem"
+        Resource = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/Events"
+      }
+    ]
   })
 }
 
@@ -155,10 +162,10 @@ data "archive_file" "list_events" {
   output_path = "${path.module}/zips/list_events.zip"
 }
 
-data "archive_file" "get_event" {
+data "archive_file" "delete_registration" {
   type        = "zip"
-  source_file = "${path.module}/../src/events/get.py"
-  output_path = "${path.module}/zips/get_event.zip"
+  source_file = "${path.module}/../src/registrations/delete.py"
+  output_path = "${path.module}/zips/delete_registration.zip"
 }
 
 data "archive_file" "register_attendee" {
@@ -191,11 +198,11 @@ resource "aws_lambda_function" "list_events" {
   role             = aws_iam_role.lambda_exec.arn
 }
 
-resource "aws_lambda_function" "get_event" {
-  function_name    = "getEvent"
-  filename         = data.archive_file.get_event.output_path
-  source_code_hash = data.archive_file.get_event.output_base64sha256
-  handler          = "get.handler"
+resource "aws_lambda_function" "delete_registration" {
+  function_name    = "deleteRegistration"
+  filename         = data.archive_file.delete_registration.output_path
+  source_code_hash = data.archive_file.delete_registration.output_base64sha256
+  handler          = "delete.handler"
   runtime          = "python3.12"
   role             = aws_iam_role.lambda_exec.arn
 }
@@ -233,9 +240,20 @@ resource "aws_dynamodb_table" "registrations" {
     type = "S"
   }
 
+  attribute {
+    name = "attendeeEmail"
+    type = "S"
+  }
+
   global_secondary_index {
     name            = "eventId-index"
     hash_key        = "eventId"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "attendeeEmail-index"
+    hash_key        = "attendeeEmail"
     projection_type = "ALL"
   }
 }
@@ -252,34 +270,47 @@ resource "aws_api_gateway_resource" "events" {
   path_part   = "events"
 }
 
-# /events/{id}
-resource "aws_api_gateway_resource" "event_id" {
-  rest_api_id = aws_api_gateway_rest_api.api.id
-  parent_id   = aws_api_gateway_resource.events.id
-  path_part   = "{eventId}"
-}
-
-# /events/{id}/register
+# /register
 resource "aws_api_gateway_resource" "register" {
   rest_api_id = aws_api_gateway_rest_api.api.id
-  parent_id   = aws_api_gateway_resource.event_id.id
+  parent_id   = aws_api_gateway_rest_api.api.root_resource_id
   path_part   = "register"
 }
 
-# /events/{id}/registrations
+# /registrations
 resource "aws_api_gateway_resource" "registrations" {
   rest_api_id = aws_api_gateway_rest_api.api.id
-  parent_id   = aws_api_gateway_resource.event_id.id
+  parent_id   = aws_api_gateway_rest_api.api.root_resource_id
   path_part   = "registrations"
+}
+
+# /registrations/{email}
+resource "aws_api_gateway_resource" "registrations_email" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.registrations.id
+  path_part   = "{email}"
+}
+
+# /registration
+resource "aws_api_gateway_resource" "registration" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_rest_api.api.root_resource_id
+  path_part   = "registration"
+}
+
+# /registration/{id}
+resource "aws_api_gateway_resource" "registration_id" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.registration.id
+  path_part   = "{id}"
 }
 
 locals {
   routes = {
-    post_events       = { method = "POST", resource_id = aws_api_gateway_resource.events.id, lambda = aws_lambda_function.create_event }
-    get_events        = { method = "GET", resource_id = aws_api_gateway_resource.events.id, lambda = aws_lambda_function.list_events }
-    get_event         = { method = "GET", resource_id = aws_api_gateway_resource.event_id.id, lambda = aws_lambda_function.get_event }
-    post_register     = { method = "POST", resource_id = aws_api_gateway_resource.register.id, lambda = aws_lambda_function.register_attendee }
-    get_registrations = { method = "GET", resource_id = aws_api_gateway_resource.registrations.id, lambda = aws_lambda_function.list_registrations }
+    get_events            = { method = "GET",    resource_id = aws_api_gateway_resource.events.id,             lambda = aws_lambda_function.list_events }
+    post_register         = { method = "POST",   resource_id = aws_api_gateway_resource.register.id,           lambda = aws_lambda_function.register_attendee }
+    get_registrations     = { method = "GET",    resource_id = aws_api_gateway_resource.registrations_email.id, lambda = aws_lambda_function.list_registrations }
+    delete_registration   = { method = "DELETE", resource_id = aws_api_gateway_resource.registration_id.id,    lambda = aws_lambda_function.delete_registration }
   }
 }
 
@@ -318,9 +349,11 @@ resource "aws_api_gateway_deployment" "deployment" {
   triggers = {
     redeployment = sha1(jsonencode([
       aws_api_gateway_resource.events,
-      aws_api_gateway_resource.event_id,
       aws_api_gateway_resource.register,
       aws_api_gateway_resource.registrations,
+      aws_api_gateway_resource.registrations_email,
+      aws_api_gateway_resource.registration,
+      aws_api_gateway_resource.registration_id,
       aws_api_gateway_method.methods,
       aws_api_gateway_integration.integrations,
     ]))
@@ -355,11 +388,10 @@ resource "aws_sns_topic_subscription" "alarms_email" {
 # CloudWatch alarms
 locals {
   lambda_functions = {
-    create_event       = aws_lambda_function.create_event.function_name
-    list_events        = aws_lambda_function.list_events.function_name
-    get_event          = aws_lambda_function.get_event.function_name
-    register_attendee  = aws_lambda_function.register_attendee.function_name
-    list_registrations = aws_lambda_function.list_registrations.function_name
+    list_events           = aws_lambda_function.list_events.function_name
+    register_attendee     = aws_lambda_function.register_attendee.function_name
+    list_registrations    = aws_lambda_function.list_registrations.function_name
+    delete_registration   = aws_lambda_function.delete_registration.function_name
   }
 }
 

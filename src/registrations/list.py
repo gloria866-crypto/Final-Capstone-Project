@@ -15,13 +15,13 @@ class DecimalEncoder(json.JSONEncoder):
 
 
 def handler(event, context):
-    event_id = event.get("pathParameters", {}).get("eventId")
-    if not event_id:
-        return {"statusCode": 400, "body": json.dumps({"error": "Missing eventId"})}
+    email = event.get("pathParameters", {}).get("email")
+    if not email:
+        return {"statusCode": 400, "body": json.dumps({"error": "Missing email"})}
 
     result = table.query(
-        IndexName="eventId-index",
-        KeyConditionExpression=Key("eventId").eq(event_id)
+        IndexName="attendeeEmail-index",
+        KeyConditionExpression=Key("attendeeEmail").eq(email)
     )
 
     return {"statusCode": 200, "body": json.dumps(result["Items"], cls=DecimalEncoder)}
