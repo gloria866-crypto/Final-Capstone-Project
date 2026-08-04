@@ -340,3 +340,73 @@ resource "aws_api_gateway_stage" "stage" {
 output "api_url" {
   value = aws_api_gateway_stage.stage.invoke_url
 }
+
+# SNS topic for CloudWatch alarm notifications
+resource "aws_sns_topic" "alarms" {
+  name = "cloudwatch-alarms-topic"
+}
+
+resource "aws_sns_topic_subscription" "alarms_email" {
+  topic_arn = aws_sns_topic.alarms.arn
+  protocol  = "email"
+  endpoint  = "yaaappaih2@gmail.com"
+}
+
+# CloudWatch alarms
+locals {
+  lambda_functions = {
+    create_event       = aws_lambda_function.create_event.function_name
+    list_events        = aws_lambda_function.list_events.function_name
+    get_event          = aws_lambda_function.get_event.function_name
+    register_attendee  = aws_lambda_function.register_attendee.function_name
+    list_registrations = aws_lambda_function.list_registrations.function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  for_each            = local.lambda_functions
+  alarm_name          = "${each.value}-errors"
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  dimensions          = { FunctionName = each.value }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "apigw_5xx" {
+  alarm_name          = "apigw-5xx-errors"
+  namespace           = "AWS/ApiGateway"
+  metric_name         = "5XXError"
+  dimensions = {
+    ApiName  = aws_api_gateway_rest_api.api.name
+    Stage    = aws_api_gateway_stage.stage.stage_name
+  }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_budgets_budget" "monthly" {
+  name         = "monthly-budget"
+  budget_type  = "COST"
+  limit_amount = "5"
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = ["yaaappaih2@gmail.com"]
+  }
+}
