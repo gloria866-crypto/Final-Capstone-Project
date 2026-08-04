@@ -396,7 +396,7 @@ resource "aws_cloudwatch_metric_alarm" "apigw_5xx" {
 }
 
 resource "aws_budgets_budget" "monthly" {
-  name         = "monthly-budget"
+  name         = "capstone-project-budget"
   budget_type  = "COST"
   limit_amount = "5"
   limit_unit   = "USD"
