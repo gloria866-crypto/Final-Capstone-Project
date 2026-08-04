@@ -1,9 +1,5 @@
 import json
-import boto3
 from decimal import Decimal
-
-dynamodb = boto3.resource("dynamodb")
-table = dynamodb.Table("Events")
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -13,6 +9,5 @@ class DecimalEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def handler(event, context):
-    result = table.scan()
-    return {"statusCode": 200, "body": json.dumps(result["Items"], cls=DecimalEncoder)}
+def dumps(obj):
+    return json.dumps(obj, cls=DecimalEncoder)

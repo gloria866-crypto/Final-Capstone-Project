@@ -1,8 +1,16 @@
 import json
 import boto3
+from decimal import Decimal
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table("Events")
+
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return int(obj) if obj % 1 == 0 else float(obj)
+        return super().default(obj)
 
 
 def handler(event, context):
@@ -16,4 +24,4 @@ def handler(event, context):
     if not item:
         return {"statusCode": 404, "body": json.dumps({"error": "Event not found"})}
 
-    return {"statusCode": 200, "body": json.dumps(item)}
+    return {"statusCode": 200, "body": json.dumps(item, cls=DecimalEncoder)}

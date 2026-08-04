@@ -2,11 +2,19 @@ import json
 import boto3
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from botocore.exceptions import ClientError
 
 dynamodb = boto3.resource("dynamodb")
 events_table = dynamodb.Table("Events")
 registrations_table = dynamodb.Table("Registrations")
+
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return int(obj) if obj % 1 == 0 else float(obj)
+        return super().default(obj)
 
 REQUIRED_FIELDS = ["eventId", "attendeeName", "attendeeEmail"]
 
@@ -33,7 +41,8 @@ def handler(event, context):
         events_table.update_item(
             Key={"eventId": body["eventId"]},
             UpdateExpression="SET ticketsSold = ticketsSold + :inc",
-            ConditionExpression="ticketsSold < capacity",
+            ConditionExpression="ticketsSold < #cap",
+            ExpressionAttributeNames={"#cap": "capacity"},
             ExpressionAttributeValues={":inc": 1},
         )
     except ClientError as e:
@@ -50,4 +59,4 @@ def handler(event, context):
     }
     registrations_table.put_item(Item=item)
 
-    return {"statusCode": 201, "body": json.dumps(item)}
+    return {"statusCode": 201, "body": json.dumps(item, cls=DecimalEncoder)}
